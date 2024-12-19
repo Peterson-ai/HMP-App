@@ -932,6 +932,15 @@ class UrlMappings {
             action = [GET: "read", POST: "update", PUT: "update", DELETE: "delete"]
         }
 
+        "/api/containers/$id/details"(parseRequest: true) {
+            controller = "containerApi"
+            action = [GET: "details"]
+        }
+        "/api/containers/$id/labels/$documentId**?" {
+            controller = { "containerApi" }
+            action = [GET: "renderLabel", POST: "printLabel", PUT: "printLabel"]
+        }
+
         // Error handling
 
         "401"(controller: "errors", action: "handleUnauthorized")
