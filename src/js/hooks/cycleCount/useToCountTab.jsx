@@ -4,13 +4,12 @@ import { createColumnHelper } from '@tanstack/react-table';
 import _ from 'lodash';
 import { useSelector } from 'react-redux';
 
-import cycleCountApi from 'api/services/CycleCountApi';
 import { CYCLE_COUNT_CANDIDATES } from 'api/urls';
 import { TableCell } from 'components/DataTable';
 import TableHeaderCell from 'components/DataTable/TableHeaderCell';
 import Checkbox from 'components/form-elements/v2/Checkbox';
 import { INVENTORY_ITEM_URL } from 'consts/applicationUrls';
-import { TO_COUNT_TAB } from 'consts/cycleCount';
+import CycleCountStatus from 'consts/cycleCountStatus';
 import useSpinner from 'hooks/useSpinner';
 import useTableCheckboxes from 'hooks/useTableCheckboxes';
 import useTableDataV2 from 'hooks/useTableDataV2';
@@ -19,21 +18,18 @@ import useTranslate from 'hooks/useTranslate';
 import Badge from 'utils/Badge';
 import exportFileFromAPI from 'utils/file-download-util';
 import { mapStringToList } from 'utils/form-values-utils';
+import StatusIndicator from 'utils/StatusIndicator';
 
-const useAllProductsTab = ({
+const useToCountTab = ({
   filterParams,
-  switchTab,
   offset,
   pageSize,
 }) => {
   const columnHelper = createColumnHelper();
-  const spinner = useSpinner();
   const translate = useTranslate();
+  const spinner = useSpinner();
 
-  const {
-    currentLocale,
-    currentLocation,
-  } = useSelector((state) => ({
+  const { currentLocale, currentLocation } = useSelector((state) => ({
     currentLocale: state.session.activeLanguage,
     currentLocation: state.session.currentLocation,
   }));
@@ -51,6 +47,7 @@ const useAllProductsTab = ({
   const getParams = ({
     sortingParams,
   }) => _.omitBy({
+    status: CycleCountStatus.CREATED,
     offset: `${offset}`,
     max: `${pageSize}`,
     ...sortingParams,
@@ -78,13 +75,20 @@ const useAllProductsTab = ({
   } = useTableSorting();
 
   const {
+    selectRow,
+    isChecked,
+    selectHeaderCheckbox,
+    selectedCheckboxesAmount,
+    headerCheckboxProps,
+  } = useTableCheckboxes();
+
+  const {
     tableData,
     loading,
   } = useTableDataV2({
     url: CYCLE_COUNT_CANDIDATES(currentLocation?.id),
     errorMessageId: 'react.cycleCount.table.errorMessage.label',
     defaultErrorMessage: 'Unable to fetch products',
-    // We should start fetching after initializing the filters to avoid re-fetching
     shouldFetch: filterParams.tab,
     getParams,
     pageSize,
@@ -95,26 +99,15 @@ const useAllProductsTab = ({
     filterParams,
   });
 
-  const {
-    selectRow,
-    isChecked,
-    selectHeaderCheckbox,
-    selectedCheckboxesAmount,
-    checkedCheckboxes,
-    headerCheckboxProps,
-  } = useTableCheckboxes();
+  const getProductIds = () => tableData.data.map((row) => row.product.id);
 
-  const productIds = tableData.data.map((row) => row.product.id);
-
-  // Separated from columns to reduce the amount of rerenders of
-  // the rest columns (on checked checkboxes change)
   const checkboxesColumn = columnHelper.accessor('selected', {
     header: () => (
       <TableHeaderCell>
         <Checkbox
           noWrapper
           {...headerCheckboxProps}
-          onClick={selectHeaderCheckbox(productIds)}
+          onClick={selectHeaderCheckbox(getProductIds)}
         />
       </TableHeaderCell>
     ),
@@ -135,15 +128,19 @@ const useAllProductsTab = ({
   });
 
   const columns = useMemo(() => [
-    columnHelper.accessor('lastCountDate', {
+    columnHelper.accessor('status', {
       header: () => (
-        <TableHeaderCell sortable columnId="dateLastCount" {...sortableProps}>
-          {translate('react.cycleCount.table.lastCounted.label', 'Last Counted')}
+        <TableHeaderCell>
+          {translate('react.cycleCount.table.status.label', 'Status')}
         </TableHeaderCell>
       ),
-      cell: ({ getValue }) => (
+      cell: () => (
+        // TODO: Use variant and status fetched from the API
         <TableCell className="rt-td">
-          {getValue()}
+          <StatusIndicator
+            variant="danger"
+            status={translate('react.cycleCount.toCount.status.label', 'To count')}
+          />
         </TableCell>
       ),
     }),
@@ -156,7 +153,7 @@ const useAllProductsTab = ({
       ),
       cell: ({ getValue, row }) => (
         <TableCell
-          link={INVENTORY_ITEM_URL.showStockCard(row.original.product.id)}
+          link={INVENTORY_ITEM_URL.showStockCard(row.original.product.productCode)}
           className="rt-td multiline-cell"
         >
           {getValue()}
@@ -177,27 +174,19 @@ const useAllProductsTab = ({
     }),
     columnHelper.accessor('internalLocations', {
       header: () => (
-        <TableHeaderCell>
+        <TableHeaderCell sortable columnId="internalLocations" {...sortableProps}>
           {translate('react.cycleCount.table.binLocation.label', 'Bin Location')}
         </TableHeaderCell>
       ),
-      cell: ({ getValue }) => {
-        const binLocationList = mapStringToList(getValue(), ',');
-
-        return (
-          <TableCell
-            className="rt-td"
-            tooltip
-            tooltipLabel={`${getValue()} (${binLocationList.length})`}
-          >
-            {binLocationList.map((binLocationName) => (
-              <div className="truncate-text" key={crypto.randomUUID()}>
-                {binLocationName}
-              </div>
-            ))}
-          </TableCell>
-        );
-      },
+      cell: ({ getValue }) => (
+        <TableCell
+          className="rt-td"
+          tooltip
+          tooltipLabel={getValue()}
+        >
+          {mapStringToList(getValue(), ',', 100).map((binLocationName) => <div>{binLocationName}</div>)}
+        </TableCell>
+      ),
     }),
     columnHelper.accessor((row) =>
       row?.tags?.map?.((tag) => <Badge label={tag?.tag} variant="badge--purple" key={tag.id} />), {
@@ -275,31 +264,14 @@ const useAllProductsTab = ({
     });
   };
 
-  const countSelected = async () => {
-    const payload = {
-      requests: checkedCheckboxes.map((productId) => ({
-        product: productId,
-        blindCount: true,
-      })),
-    };
-    spinner.show();
-    try {
-      await cycleCountApi.createRequest(payload, currentLocation?.id);
-      switchTab(TO_COUNT_TAB);
-    } finally {
-      spinner.hide();
-    }
-  };
-
   return {
-    columns: [checkboxesColumn, ...columns],
     tableData,
     loading,
+    columns: [checkboxesColumn, ...columns],
     emptyTableMessage,
     exportTableData,
     selectedCheckboxesAmount,
-    countSelected,
   };
 };
 
-export default useAllProductsTab;
+export default useToCountTab;
